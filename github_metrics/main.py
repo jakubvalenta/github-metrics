@@ -8,7 +8,7 @@ import re
 import sys
 from hashlib import sha256
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Iterator, Optional
 
 import pandas as pd
 import requests

@@ -1,23 +1,5 @@
 _python_pkg := github_metrics
 
-results_dir ?= results
-
-export ACCESS_TOKEN=$(shell secret-tool lookup datawrapper-github personal-access-token-metrics)
-
-.PHONY: run
-run: $(results_dir)/stats.csv  ## Run
-
-$(results_dir)/stats.csv: | $(results_dir)
-	./github-metrics -v \
-		--owner datawrapper --repo code \
-		--cache cache \
-		--data $(results_dir)/data.csv \
-		--stats-daily $(results_dir)/stats_daily.csv \
-		--stats-weekly $(results_dir)/stats_weekly.csv
-
-$(results_dir):
-	mkdir -p "$@"
-
 .PHONY: setup
 setup:  ## Create virtual environment and install dependencies.
 	poetry install
