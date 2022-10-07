@@ -103,7 +103,7 @@ def transform_pull_request_item(item: dict) -> Optional[PullRequest]:
     )
 
 
-def calc_stats(df: pd.DataFrame) -> pd.DataFrame:
+def calc_stats_daily(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         {
             'created_daily': df.groupby(
@@ -112,8 +112,24 @@ def calc_stats(df: pd.DataFrame) -> pd.DataFrame:
             'merged_daily': df.groupby(
                 [pd.Grouper(key='merged_at', freq='D')]
             )['merged_at'].count(),
-            'created_to_merged_minutes_weekly': df.groupby(
+            'created_to_merged_minutes_daily': df.groupby(
+                [pd.Grouper(key='merged_at', freq='D')]
+            )['created_to_merged_minutes'].mean(),
+        }
+    )
+
+
+def calc_stats_weekly(df: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            'created_weekly': df.groupby(
                 [pd.Grouper(key='created_at', freq='W')]
+            )['created_at'].count(),
+            'merged_weekly': df.groupby(
+                [pd.Grouper(key='merged_at', freq='W')]
+            )['merged_at'].count(),
+            'created_to_merged_minutes_weekly': df.groupby(
+                [pd.Grouper(key='merged_at', freq='W')]
             )['created_to_merged_minutes'].mean(),
         }
     )
@@ -141,7 +157,10 @@ def main():
         default=sys.stdout,
     )
     parser.add_argument(
-        '-s', '--stats', nargs='?', type=argparse.FileType('w')
+        '--stats-daily', nargs='?', type=argparse.FileType('w')
+    )
+    parser.add_argument(
+        '--stats-weekly', nargs='?', type=argparse.FileType('w')
     )
 
     args = parser.parse_args()
@@ -170,14 +189,27 @@ def main():
         ],
     )
 
-    if args.stats:
-        df_stats = calc_stats(df)
-        df_stats.to_csv(
-            args.stats,
+    if args.stats_daily:
+        df_stats_daily = calc_stats_daily(df)
+        df_stats_daily.to_csv(
+            args.stats_daily,
             index_label='date',
             columns=[
                 'created_daily',
                 'merged_daily',
+                'created_to_merged_minutes_daily',
+            ],
+            date_format='%Y-%m-%d',
+        )
+
+    if args.stats_weekly:
+        df_stats_weekly = calc_stats_weekly(df)
+        df_stats_weekly.to_csv(
+            args.stats_weekly,
+            index_label='date',
+            columns=[
+                'created_weekly',
+                'merged_weekly',
                 'created_to_merged_minutes_weekly',
             ],
             date_format='%Y-%m-%d',

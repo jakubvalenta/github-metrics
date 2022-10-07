@@ -12,7 +12,8 @@ $(results_dir)/stats.csv: | $(results_dir)
 		--owner datawrapper --repo code \
 		--cache cache \
 		--data $(results_dir)/data.csv \
-		--stats $(results_dir)/stats.csv
+		--stats-daily $(results_dir)/stats_daily.csv \
+		--stats-weekly $(results_dir)/stats_weekly.csv
 
 $(results_dir):
 	mkdir -p "$@"
