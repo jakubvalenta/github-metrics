@@ -35,14 +35,14 @@ $ make setup
 ## Usage
 
 ```shell
-ACCESS_TOKEN='<your github token>'
+ACCESS_TOKEN='<your github token>' \
 ./github-metrics -v \
     --owner '<repo owner>' \
     --repo '<repo name'> \
-	--cache cache \
-	--data results/data.csv \
-	--stats-daily results/stats_daily.csv \
-	--stats-weekly results/stats_weekly.csv
+    --cache cache \
+    --data results/data.csv \
+    --stats-daily results/stats_daily.csv \
+    --stats-weekly results/stats_weekly.csv
 ```
 
 You can now find the statistics as CSV files in:
