@@ -1,13 +1,16 @@
 import argparse
-import csv
+import dataclasses
 import datetime
+import json
 import logging
 import os
 import re
 import sys
-from dataclasses import dataclass
-from typing import IO, Iterable, Iterator, Optional
+from hashlib import sha256
+from pathlib import Path
+from typing import Iterable, Iterator, Optional
 
+import pandas as pd
 import requests
 from dateutil.parser import parse as parse_datetime
 
@@ -16,29 +19,72 @@ from github_metrics import __title__
 logger = logging.getLogger(__name__)
 
 
-@dataclass
+@dataclasses.dataclass
 class PullRequest:
     title: str
     url: str
     created_at: datetime.datetime
+    merged_at: datetime.datetime
     created_to_merged_minutes: int
 
 
-def github_api_list(url: str, token: str) -> Iterator[dict]:
-    logger.info('Fetching %s', url)
-    r = requests.get(
-        url,
-        headers={
-            'Accept': 'application/vnd.github+json',
-            'Authorization': f'Bearer {token}',
-        },
-    )
-    r.raise_for_status()
-    m = re.search(r'<(?P<url>[^<]+)>; rel="next"', r.headers['Link'])
-    next_url = m.group('url') if m else None
-    yield from r.json()
+def safe_filename(s: str, max_length: int = 64) -> str:
+    short_hash = sha256(s.encode()).hexdigest()[:7]
+    safe_str = re.sub(r'[^A-Za-z0-9_\-\.]', '_', s).strip('_')[:max_length]
+    return f'{safe_str}--{short_hash}'
+
+
+def github_api_list(url: str, token: str, cache_path: Path) -> Iterator[dict]:
+    # Read cache
+    path = cache_path / (safe_filename(url) + '.json')
+    if path.is_file():
+        logger.info('Reading %s from cache', url)
+        with path.open('r') as f:
+            data = json.load(f)
+            items = data['items']
+            next_url = data['next_url']
+    else:
+        # Fetch
+        logger.info('Fetching %s', url)
+        r = requests.get(
+            url,
+            headers={
+                'Accept': 'application/vnd.github+json',
+                'Authorization': f'Bearer {token}',
+            },
+        )
+        r.raise_for_status()
+
+        # Parse response
+        items = r.json()
+        m = re.search(r'<(?P<url>[^<]+)>; rel="next"', r.headers['Link'])
+        next_url = m.group('url') if m else None
+
+        # Write cache
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open('w') as f:
+            data = {'items': items, 'next_url': next_url}
+            json.dump(data, f)
+
+    # Yield items
+    yield from items
+
+    # Continue with next page
     if next_url:
-        yield from github_api_list(next_url, token)
+        yield from github_api_list(next_url, token, cache_path)
+
+
+def fetch_pull_requests(
+    owner: str, repo: str, token: str, cache_path: Path
+) -> Iterator[PullRequest]:
+    for item in github_api_list(
+        f'https://api.github.com/repos/{owner}/{repo}/pulls?state=closed',
+        token,
+        cache_path,
+    ):
+        pull_request = transform_pull_request_item(item)
+        if pull_request:
+            yield pull_request
 
 
 def transform_pull_request_item(item: dict) -> Optional[PullRequest]:
@@ -52,36 +98,25 @@ def transform_pull_request_item(item: dict) -> Optional[PullRequest]:
         title=item['title'],
         url=item['html_url'],
         created_at=created_at,
+        merged_at=merged_at,
         created_to_merged_minutes=create_to_merge_minutes,
     )
 
 
-def fetch_pull_requests(
-    owner: str, repo: str, token: str
-) -> Iterator[PullRequest]:
-    for item in github_api_list(
-        f'https://api.github.com/repos/{owner}/{repo}/pulls?state=closed',
-        token,
-    ):
-        pull_request = transform_pull_request_item(item)
-        if pull_request:
-            yield pull_request
-
-
-def write_pull_requests_as_csv(pull_requests: Iterable[PullRequest], f: IO):
-    writer = csv.writer(f, lineterminator='\n')
-    writer.writerow(
-        ('title', 'url', 'created_at', 'created_to_merged_minutes')
+def calc_stats(df: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            'created_daily': df.groupby(
+                [pd.Grouper(key='created_at', freq='D')]
+            )['created_at'].count(),
+            'merged_daily': df.groupby(
+                [pd.Grouper(key='merged_at', freq='D')]
+            )['merged_at'].count(),
+            'created_to_merged_minutes_weekly': df.groupby(
+                [pd.Grouper(key='created_at', freq='W')]
+            )['created_to_merged_minutes'].mean(),
+        }
     )
-    for pull_request in pull_requests:
-        writer.writerow(
-            (
-                pull_request.title,
-                pull_request.url,
-                pull_request.created_at.isoformat(),
-                pull_request.created_to_merged_minutes,
-            )
-        )
 
 
 def main():
@@ -89,10 +124,24 @@ def main():
     parser.add_argument(
         '-v', '--verbose', action='store_true', help='Enable debugging output'
     )
+    parser.add_argument(
+        '-c',
+        '--cache',
+        help='Cache directory path',
+        type=Path,
+        required=True,
+    )
     parser.add_argument('--owner', help='Repository owner', required=True)
     parser.add_argument('--repo', help='Repository name', required=True)
     parser.add_argument(
-        'outfile', nargs='?', type=argparse.FileType('w'), default=sys.stdout
+        '-d',
+        '--data',
+        nargs='?',
+        type=argparse.FileType('w'),
+        default=sys.stdout,
+    )
+    parser.add_argument(
+        '-s', '--stats', nargs='?', type=argparse.FileType('w')
     )
 
     args = parser.parse_args()
@@ -105,8 +154,34 @@ def main():
     if not token:
         raise Exception('Missing ACCESS_TOKEN environment variable')
 
-    pull_requests = fetch_pull_requests(args.owner, args.repo, token)
-    write_pull_requests_as_csv(pull_requests, args.outfile)
+    pull_requests = fetch_pull_requests(
+        args.owner, args.repo, token, args.cache
+    )
+    df = pd.DataFrame(dataclasses.asdict(pr) for pr in pull_requests)
+    df.to_csv(
+        args.data,
+        index_label='created_at',
+        columns=[
+            'title',
+            'url',
+            'created_at',
+            'merged_at',
+            'created_to_merged_minutes',
+        ],
+    )
+
+    if args.stats:
+        df_stats = calc_stats(df)
+        df_stats.to_csv(
+            args.stats,
+            index_label='date',
+            columns=[
+                'created_daily',
+                'merged_daily',
+                'created_to_merged_minutes_weekly',
+            ],
+            date_format='%Y-%m-%d',
+        )
 
 
 if __name__ == '__main__':

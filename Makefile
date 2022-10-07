@@ -8,7 +8,11 @@ export ACCESS_TOKEN=$(shell secret-tool lookup datawrapper-github personal-acces
 run: $(results_dir)/stats.csv  ## Run
 
 $(results_dir)/stats.csv: | $(results_dir)
-	./github-metrics -v --owner datawrapper --repo code > "$@"
+	./github-metrics -v \
+		--owner datawrapper --repo code \
+		--cache cache \
+		--data $(results_dir)/data.csv \
+		--stats $(results_dir)/stats.csv
 
 $(results_dir):
 	mkdir -p "$@"
